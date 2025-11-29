@@ -71,6 +71,7 @@ type User interface {
 	Logout(ctx context.Context, userID int64) (err error)
 	ResetPassword(ctx context.Context, email, password string) (err error)
 	GetUserInfo(ctx context.Context, userID int64) (user *entity.User, err error)
+	GetUserByEmail(ctx context.Context, email string) (user *entity.User, err error)
 	UpdateAvatar(ctx context.Context, userID int64, ext string, imagePayload []byte) (url string, err error)
 	UpdateProfile(ctx context.Context, req *UpdateProfileRequest) (err error)
 	ValidateProfileUpdate(ctx context.Context, req *ValidateProfileUpdateRequest) (resp *ValidateProfileUpdateResponse, err error)

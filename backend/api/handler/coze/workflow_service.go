@@ -39,6 +39,11 @@ import (
 	"github.com/coze-dev/coze-studio/backend/pkg/sonic"
 )
 
+type copyWorkflowWithPluginsReq struct {
+	WorkflowID string `json:"workflow_id,required" form:"workflow_id,required" query:"workflow_id,required"`
+	SpaceID    string `json:"space_id,omitempty" form:"space_id" query:"space_id"`
+}
+
 // CreateWorkflow .
 // @router /api/workflow_api/create [POST]
 func CreateWorkflow(ctx context.Context, c *app.RequestContext) {
@@ -213,6 +218,40 @@ func CopyWorkflow(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, resp)
 }
 
+// CopyWorkflowWithPlugins .
+// @router /api/workflow_api/copy_with_plugins [POST]
+func CopyWorkflowWithPlugins(ctx context.Context, c *app.RequestContext) {
+	var req copyWorkflowWithPluginsReq
+	if err := c.BindAndValidate(&req); err != nil {
+		invalidParamRequestResponse(c, err.Error())
+		return
+	}
+
+	workflowID, err := strconv.ParseInt(req.WorkflowID, 10, 64)
+	if err != nil {
+		invalidParamRequestResponse(c, err.Error())
+		return
+	}
+
+	var targetSpaceID *int64
+	if req.SpaceID != "" {
+		spaceID, parseErr := strconv.ParseInt(req.SpaceID, 10, 64)
+		if parseErr != nil {
+			invalidParamRequestResponse(c, parseErr.Error())
+			return
+		}
+		targetSpaceID = &spaceID
+	}
+
+	resp, err := appworkflow.SVC.CopyWorkflowWithPluginsForCurrentUser(ctx, workflowID, targetSpaceID)
+	if err != nil {
+		internalServerErrorResponse(ctx, c, err)
+		return
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}
+
 // CopyWkTemplateApi .
 // @router /api/workflow_api/copy_wk_template [POST]
 func CopyWkTemplateApi(ctx context.Context, c *app.RequestContext) {
@@ -277,6 +316,18 @@ func GetWorkFlowList(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	resp, err := appworkflow.SVC.ListWorkflow(ctx, &req)
+	if err != nil {
+		internalServerErrorResponse(ctx, c, err)
+		return
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}
+
+// GetFirstAdminPublishedWorkflows .
+// @router /api/workflow_api/first_admin_published_workflows [GET]
+func GetFirstAdminPublishedWorkflows(ctx context.Context, c *app.RequestContext) {
+	resp, err := appworkflow.SVC.GetFirstAdminPublishedWorkflows(ctx)
 	if err != nil {
 		internalServerErrorResponse(ctx, c, err)
 		return

@@ -630,6 +630,11 @@ func _copyworkflowMw() []app.HandlerFunc {
 	return nil
 }
 
+func _copyworkflowwithpluginsMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
 func _copywktemplateapiMw() []app.HandlerFunc {
 	// your code...
 	return nil
@@ -756,6 +761,11 @@ func _getworkflowdetailinfoMw() []app.HandlerFunc {
 }
 
 func _getworkflowlistMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _getfirstadminpublishedworkflowsMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }

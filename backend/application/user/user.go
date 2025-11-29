@@ -163,6 +163,10 @@ func (u *UserApplicationService) PassportAccountInfoV2(ctx context.Context, req 
 	}, nil
 }
 
+func (u *UserApplicationService) GetUserByEmail(ctx context.Context, email string) (*entity.User, error) {
+	return u.DomainSVC.GetUserByEmail(ctx, email)
+}
+
 // UserUpdateAvatar Update user avatar
 func (u *UserApplicationService) UserUpdateAvatar(ctx context.Context, mimeType string, req *passport.UserUpdateAvatarRequest) (
 	resp *passport.UserUpdateAvatarResponse, err error,

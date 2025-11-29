@@ -152,6 +152,28 @@ func (u *userImpl) GetUserInfo(ctx context.Context, userID int64) (resp *userEnt
 	return userPo2Do(userModel, resURL), nil
 }
 
+func (u *userImpl) GetUserByEmail(ctx context.Context, email string) (resp *userEntity.User, err error) {
+	if email == "" {
+		return nil, errorx.New(errno.ErrUserInvalidParamCode, errorx.KV("msg", "email is empty"))
+	}
+
+	userModel, exist, err := u.UserRepo.GetUsersByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exist {
+		return nil, errorx.New(errno.ErrUserInfoInvalidateCode, errorx.KV("msg", "user not found"))
+	}
+
+	resURL, err := u.IconOSS.GetObjectUrl(ctx, userModel.IconURI)
+	if err != nil {
+		return nil, err
+	}
+
+	return userPo2Do(userModel, resURL), nil
+}
+
 func (u *userImpl) UpdateAvatar(ctx context.Context, userID int64, ext string, imagePayload []byte) (url string, err error) {
 	avatarKey := "user_avatar/" + strconv.FormatInt(userID, 10) + "." + ext
 	err = u.IconOSS.PutObject(ctx, avatarKey, imagePayload)

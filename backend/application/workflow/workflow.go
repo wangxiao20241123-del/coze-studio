@@ -42,6 +42,7 @@ import (
 	appmemory "github.com/coze-dev/coze-studio/backend/application/memory"
 	appplugin "github.com/coze-dev/coze-studio/backend/application/plugin"
 	"github.com/coze-dev/coze-studio/backend/application/user"
+	bizconf "github.com/coze-dev/coze-studio/backend/bizpkg/config"
 	"github.com/coze-dev/coze-studio/backend/bizpkg/debugutil"
 	crossknowledge "github.com/coze-dev/coze-studio/backend/crossdomain/knowledge"
 	model "github.com/coze-dev/coze-studio/backend/crossdomain/knowledge/model"
@@ -85,6 +86,8 @@ var (
 	nodeIconURLCache   = make(map[string]string)
 	nodeIconURLCacheMu sync.Mutex
 )
+
+const adminWorkflowListPageSize int32 = 100
 
 func GetWorkflowDomainSVC() domainWorkflow.Service {
 	return SVC.DomainSVC
@@ -2616,6 +2619,150 @@ func (w *ApplicationService) ListWorkflow(ctx context.Context, req *workflow.Get
 	return response, nil
 }
 
+func (w *ApplicationService) GetFirstAdminPublishedWorkflows(ctx context.Context) (
+	_ *workflow.GetWorkFlowListResponse, err error,
+) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			err = safego.NewPanicErr(panicErr, debug.Stack())
+		}
+
+		if err != nil {
+			err = vo.WrapIfNeeded(errno.ErrWorkflowOperationFail, err, errorx.KV("cause", vo.UnwrapRootErr(err).Error()))
+		}
+	}()
+
+	baseConfig, err := bizconf.Base().GetBaseConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	adminEmail := pickFirstAdminEmail(baseConfig.AdminEmails)
+	if adminEmail == "" {
+		return nil, fmt.Errorf("admin emails is empty")
+	}
+
+	adminUser, err := user.UserApplicationSVC.GetUserByEmail(ctx, adminEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	spaces, err := crossuser.DefaultSVC().GetUserSpaceList(ctx, adminUser.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	response := newWorkflowListResponse()
+	if len(spaces) == 0 {
+		return response, nil
+	}
+
+	wf2CreatorID := make(map[int64]string)
+	for _, space := range spaces {
+		spaceID := space.ID
+		page := int32(1)
+		for {
+			wfs, _, err := GetWorkflowDomainSVC().MGet(ctx, &vo.MGetPolicy{
+				MetaQuery: vo.MetaQuery{
+					Page: &vo.Page{
+						Page: page,
+						Size: adminWorkflowListPageSize,
+					},
+					SpaceID:       ptr.Of(spaceID),
+					PublishStatus: ptr.Of(vo.HasPublished),
+					DescByUpdate:  true,
+				},
+				QType:    workflowModel.FromLatestVersion,
+				MetaOnly: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			if len(wfs) == 0 {
+				break
+			}
+
+			for _, wf := range wfs {
+				wf2CreatorID[wf.ID] = strconv.FormatInt(wf.CreatorID, 10)
+				apiWorkflow := &workflow.Workflow{
+					WorkflowID:       strconv.FormatInt(wf.ID, 10),
+					Name:             wf.Name,
+					Desc:             wf.Desc,
+					IconURI:          wf.IconURI,
+					URL:              wf.IconURL,
+					CreateTime:       wf.CreatedAt.Unix(),
+					Type:             wf.ContentType,
+					SchemaType:       workflow.SchemaType_FDL,
+					Tag:              wf.Tag,
+					TemplateAuthorID: ptr.Of(strconv.FormatInt(wf.AuthorID, 10)),
+					SpaceID:          ptr.Of(strconv.FormatInt(wf.SpaceID, 10)),
+					ProjectID:        i64PtrToStringPtr(wf.AppID),
+					PluginID:         strconv.FormatInt(wf.ID, 10),
+					Creator: &workflow.Creator{
+						ID:   strconv.FormatInt(wf.CreatorID, 10),
+						Self: wf.CreatorID == adminUser.UserID,
+					},
+				}
+
+				if wf.VersionMeta != nil {
+					apiWorkflow.UpdateTime = wf.VersionMeta.VersionCreatedAt.Unix()
+				} else if wf.UpdatedAt != nil {
+					apiWorkflow.UpdateTime = wf.UpdatedAt.Unix()
+				} else if wf.DraftMeta != nil {
+					apiWorkflow.UpdateTime = wf.DraftMeta.Timestamp.Unix()
+				}
+
+				startNode := &workflow.Node{
+					NodeID:    "100001",
+					NodeName:  "start-node",
+					NodeParam: &workflow.NodeParam{InputParameters: make([]*workflow.Parameter, 0)},
+				}
+
+				for _, in := range wf.InputParams {
+					param, convErr := toWorkflowParameter(in)
+					if convErr != nil {
+						return nil, convErr
+					}
+					startNode.NodeParam.InputParameters = append(startNode.NodeParam.InputParameters, param)
+				}
+
+				apiWorkflow.StartNode = startNode
+				response.Data.WorkflowList = append(response.Data.WorkflowList, apiWorkflow)
+				response.Data.AuthList = append(response.Data.AuthList, &workflow.ResourceAuthInfo{
+					WorkflowID: strconv.FormatInt(wf.ID, 10),
+					UserID:     strconv.FormatInt(wf.CreatorID, 10),
+					Auth:       &workflow.ResourceActionAuth{CanEdit: true, CanDelete: true, CanCopy: true},
+				})
+			}
+
+			if len(wfs) < int(adminWorkflowListPageSize) {
+				break
+			}
+			page++
+		}
+	}
+
+	if len(wf2CreatorID) > 0 {
+		userBasicInfoResponse, err := user.UserApplicationSVC.MGetUserBasicInfo(ctx, &playground.MGetUserBasicInfoRequest{
+			UserIds: slices.Unique(xmaps.Values(wf2CreatorID)),
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		for _, wfItem := range response.Data.WorkflowList {
+			if uInfo, ok := userBasicInfoResponse.UserBasicInfoMap[wfItem.Creator.ID]; ok {
+				wfItem.Creator.Name = uInfo.Username
+				wfItem.Creator.AvatarURL = uInfo.UserAvatar
+			}
+		}
+	}
+
+	response.Data.Total = int64(len(response.Data.WorkflowList))
+	return response, nil
+}
+
 func (w *ApplicationService) GetWorkflowDetail(ctx context.Context, req *workflow.GetWorkflowDetailRequest) (
 	_ *vo.WorkflowDetailDataList, err error,
 ) {
@@ -3481,6 +3628,88 @@ func (w *ApplicationService) CopyWorkflow(ctx context.Context, req *workflow.Cop
 	}, err
 }
 
+func (w *ApplicationService) CopyWorkflowWithPluginsForCurrentUser(ctx context.Context, workflowID int64, targetSpaceID *int64) (
+	resp *workflow.CopyWorkflowResponse, err error,
+) {
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			err = safego.NewPanicErr(panicErr, debug.Stack())
+		}
+
+		if err != nil {
+			err = vo.WrapIfNeeded(errno.ErrWorkflowOperationFail, err, errorx.KV("cause", vo.UnwrapRootErr(err).Error()))
+		}
+	}()
+
+	userID := ctxutil.MustGetUIDFromCtx(ctx)
+	wfEntity, err := GetWorkflowDomainSVC().Get(ctx, &vo.GetPolicy{
+		ID:       workflowID,
+		QType:    workflowModel.FromDraft,
+		MetaOnly: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err = checkUserSpace(ctx, userID, wfEntity.SpaceID); err != nil {
+		isAdminCreator, creatorErr := w.isAdminUser(ctx, wfEntity.CreatorID)
+		if creatorErr != nil {
+			return nil, creatorErr
+		}
+		if !isAdminCreator {
+			return nil, err
+		}
+	}
+
+	if targetSpaceID != nil {
+		if err = checkUserSpace(ctx, userID, *targetSpaceID); err != nil {
+			return nil, err
+		}
+	}
+
+	policy := vo.CopyWorkflowPolicy{
+		ShouldModifyWorkflowName: true,
+	}
+	if targetSpaceID != nil {
+		policy.TargetSpaceID = targetSpaceID
+	}
+
+	wf, err := w.CopyWorkflowWithPlugins(ctx, workflowID, policy)
+	if err != nil {
+		return nil, err
+	}
+
+	return &workflow.CopyWorkflowResponse{
+		Data: &workflow.CopyWorkflowData{
+			WorkflowID: strconv.FormatInt(wf.ID, 10),
+		},
+	}, nil
+}
+
+func (w *ApplicationService) isAdminUser(ctx context.Context, userID int64) (bool, error) {
+	baseConf, err := bizconf.Base().GetBaseConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	if baseConf.AdminEmails == "" {
+		return false, nil
+	}
+
+	userInfo, err := user.UserApplicationSVC.DomainSVC.GetUserInfo(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+
+	adminEmails := strings.Split(baseConf.AdminEmails, ",")
+	for _, email := range adminEmails {
+		if strings.EqualFold(strings.TrimSpace(email), userInfo.Email) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func (w *ApplicationService) GetHistorySchema(ctx context.Context, req *workflow.GetHistorySchemaRequest) (
 	resp *workflow.GetHistorySchemaResponse, err error,
 ) {
@@ -3836,6 +4065,25 @@ func toWorkflowParameter(nType *vo.NamedTypeInfo) (*workflow.Parameter, error) {
 	}
 
 	return wp, nil
+}
+
+func newWorkflowListResponse() *workflow.GetWorkFlowListResponse {
+	return &workflow.GetWorkFlowListResponse{
+		Data: &workflow.WorkFlowListData{
+			WorkflowList: make([]*workflow.Workflow, 0),
+			AuthList:     make([]*workflow.ResourceAuthInfo, 0),
+		},
+	}
+}
+
+func pickFirstAdminEmail(raw string) string {
+	for _, email := range strings.Split(raw, ",") {
+		trimmed := strings.TrimSpace(email)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func i64PtrToStringPtr(i *int64) *string {
