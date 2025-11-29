@@ -1173,6 +1173,30 @@ func (w *ApplicationService) CopyWorkflowFromLibraryToApp(ctx context.Context, w
 	return wf.ID, nil
 }
 
+func (w *ApplicationService) CopyWorkflowWithPlugins(ctx context.Context, workflowID int64, policy vo.CopyWorkflowPolicy) (*entity.Workflow, error) {
+	pluginMap, pluginToolMap, err := w.copyWorkflowPlugins(ctx, workflowID, pluginConsts.CopySceneOfDuplicate, policy.TargetAppID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(pluginMap) == 0 && len(pluginToolMap) == 0 {
+		return w.copyWorkflow(ctx, workflowID, policy)
+	}
+
+	canvasSchema, err := w.loadCanvasSchemaForCopy(ctx, workflowID, policy.ModifiedCanvasSchema)
+	if err != nil {
+		return nil, err
+	}
+
+	modifiedCanvas, err := rewriteCanvasWithPluginResources(canvasSchema, pluginMap, pluginToolMap)
+	if err != nil {
+		return nil, err
+	}
+
+	policy.ModifiedCanvasSchema = ptr.Of(modifiedCanvas)
+	return w.copyWorkflow(ctx, workflowID, policy)
+}
+
 func (w *ApplicationService) copyWorkflow(ctx context.Context, workflowID int64, policy vo.CopyWorkflowPolicy) (*entity.Workflow, error) {
 	wf, err := GetWorkflowDomainSVC().CopyWorkflow(ctx, workflowID, policy)
 	if err != nil {
@@ -1193,6 +1217,248 @@ func (w *ApplicationService) copyWorkflow(ctx context.Context, workflowID int64,
 	}
 
 	return wf, nil
+}
+
+func (w *ApplicationService) copyWorkflowPlugins(ctx context.Context, workflowID int64, scene pluginConsts.CopyScene, targetAppID *int64) (map[int64]*vo.PluginEntity, map[int64]int64, error) {
+	pluginMap := make(map[int64]*vo.PluginEntity)
+	pluginToolMap := make(map[int64]int64)
+
+	ds, err := GetWorkflowDomainSVC().GetWorkflowDependenceResource(ctx, workflowID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ds == nil || len(ds.PluginIDs) == 0 {
+		return pluginMap, pluginToolMap, nil
+	}
+
+	userID := ctxutil.MustGetUIDFromCtx(ctx)
+	for _, pluginID := range ds.PluginIDs {
+		if pluginID <= 0 {
+			continue
+		}
+		if _, exists := pluginMap[pluginID]; exists {
+			continue
+		}
+		resp, err := appplugin.PluginApplicationSVC.CopyPlugin(ctx, &dto.CopyPluginRequest{
+			PluginID:    pluginID,
+			UserID:      userID,
+			CopyScene:   scene,
+			TargetAPPID: targetAppID,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		if resp == nil || resp.Plugin == nil {
+			return nil, nil, fmt.Errorf("copy plugin %d returned empty result", pluginID)
+		}
+
+		pluginMap[pluginID] = &vo.PluginEntity{
+			PluginID:      resp.Plugin.ID,
+			PluginVersion: resp.Plugin.Version,
+		}
+		for oldToolID, newTool := range resp.Tools {
+			pluginToolMap[oldToolID] = newTool.ID
+		}
+	}
+
+	return pluginMap, pluginToolMap, nil
+}
+
+func (w *ApplicationService) loadCanvasSchemaForCopy(ctx context.Context, workflowID int64, override *string) (string, error) {
+	if override != nil {
+		return *override, nil
+	}
+
+	wf, err := GetWorkflowDomainSVC().Get(ctx, &vo.GetPolicy{
+		ID:    workflowID,
+		QType: workflowModel.FromDraft,
+	})
+	if err != nil {
+		return "", err
+	}
+	if wf == nil || wf.Canvas == "" {
+		return "", fmt.Errorf("workflow %d has empty canvas schema", workflowID)
+	}
+	return wf.Canvas, nil
+}
+
+func rewriteCanvasWithPluginResources(canvasSchema string, pluginMap map[int64]*vo.PluginEntity, pluginToolMap map[int64]int64) (string, error) {
+	if len(pluginMap) == 0 && len(pluginToolMap) == 0 {
+		return canvasSchema, nil
+	}
+
+	canvas := &vo.Canvas{}
+	if err := sonic.UnmarshalString(canvasSchema, canvas); err != nil {
+		return "", err
+	}
+
+	if err := replacePluginReferencesInNodes(canvas.Nodes, pluginMap, pluginToolMap); err != nil {
+		return "", err
+	}
+
+	modifiedCanvas, err := sonic.MarshalString(canvas)
+	if err != nil {
+		return "", err
+	}
+	return modifiedCanvas, nil
+}
+
+func replacePluginReferencesInNodes(nodes []*vo.Node, pluginMap map[int64]*vo.PluginEntity, pluginToolMap map[int64]int64) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	for _, node := range nodes {
+		if node == nil || node.Data == nil || node.Data.Inputs == nil {
+			continue
+		}
+
+		nodeType := entity.IDStrToNodeType(node.Type)
+		if meta := entity.NodeMetaByNodeType(nodeType); meta != nil && meta.UsePlugin {
+			if err := rewritePluginNode(node, pluginMap, pluginToolMap); err != nil {
+				return err
+			}
+		}
+
+		if nodeType == entity.NodeTypeLLM {
+			if err := rewriteLLMPluginReferences(node, pluginMap, pluginToolMap); err != nil {
+				return err
+			}
+		}
+
+		if len(node.Blocks) > 0 {
+			if err := replacePluginReferencesInNodes(node.Blocks, pluginMap, pluginToolMap); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func rewritePluginNode(node *vo.Node, pluginMap map[int64]*vo.PluginEntity, pluginToolMap map[int64]int64) error {
+	if len(pluginMap) == 0 && len(pluginToolMap) == 0 {
+		return nil
+	}
+	if node.Data.Inputs.PluginAPIParam == nil || len(node.Data.Inputs.APIParams) == 0 {
+		return nil
+	}
+
+	params := buildParamMap(node.Data.Inputs.APIParams)
+
+	if len(pluginMap) > 0 {
+		pluginIDParam, ok := params["pluginID"]
+		if !ok {
+			return fmt.Errorf("plugin id param is not found")
+		}
+		pluginVersionParam, ok := params["pluginVersion"]
+		if !ok {
+			return fmt.Errorf("plugin version param is not found")
+		}
+
+		pluginIDStr, err := paramValueAsString(pluginIDParam)
+		if err != nil {
+			return err
+		}
+		pluginID, err := strconv.ParseInt(pluginIDStr, 10, 64)
+		if err != nil {
+			return err
+		}
+		if refPlugin, ok := pluginMap[pluginID]; ok {
+			pluginIDParam.Input.Value.Content = strconv.FormatInt(refPlugin.PluginID, 10)
+			if refPlugin.PluginVersion != nil {
+				pluginVersionParam.Input.Value.Content = *refPlugin.PluginVersion
+			}
+		}
+	}
+
+	if len(pluginToolMap) > 0 {
+		apiIDParam, ok := params["apiID"]
+		if !ok {
+			return fmt.Errorf("apiID param is not found")
+		}
+		apiIDStr, err := paramValueAsString(apiIDParam)
+		if err != nil {
+			return err
+		}
+		apiID, err := strconv.ParseInt(apiIDStr, 10, 64)
+		if err != nil {
+			return err
+		}
+		if refToolID, ok := pluginToolMap[apiID]; ok {
+			apiIDParam.Input.Value.Content = strconv.FormatInt(refToolID, 10)
+		}
+	}
+
+	return nil
+}
+
+func rewriteLLMPluginReferences(node *vo.Node, pluginMap map[int64]*vo.PluginEntity, pluginToolMap map[int64]int64) error {
+	if node.Data.Inputs.FCParam == nil || node.Data.Inputs.FCParam.PluginFCParam == nil {
+		return nil
+	}
+
+	list := node.Data.Inputs.FCParam.PluginFCParam.PluginList
+	for idx := range list {
+		pl := list[idx]
+		if len(pluginMap) > 0 {
+			pluginID, err := strconv.ParseInt(pl.PluginID, 10, 64)
+			if err != nil {
+				return err
+			}
+			if refPlugin, ok := pluginMap[pluginID]; ok {
+				pl.PluginID = strconv.FormatInt(refPlugin.PluginID, 10)
+				if refPlugin.PluginVersion != nil {
+					pl.PluginVersion = *refPlugin.PluginVersion
+					pl.IsDraft = false
+				}
+			}
+		}
+
+		if len(pluginToolMap) > 0 {
+			apiID, err := strconv.ParseInt(pl.ApiId, 10, 64)
+			if err != nil {
+				return err
+			}
+			if refToolID, ok := pluginToolMap[apiID]; ok {
+				pl.ApiId = strconv.FormatInt(refToolID, 10)
+			}
+		}
+
+		list[idx] = pl
+	}
+
+	node.Data.Inputs.FCParam.PluginFCParam.PluginList = list
+	return nil
+}
+
+func buildParamMap(params []*vo.Param) map[string]*vo.Param {
+	result := make(map[string]*vo.Param, len(params))
+	for _, p := range params {
+		if p == nil {
+			continue
+		}
+		result[p.Name] = p
+	}
+	return result
+}
+
+func paramValueAsString(param *vo.Param) (string, error) {
+	if param == nil || param.Input == nil || param.Input.Value == nil {
+		return "", fmt.Errorf("param %s value is empty", safeParamName(param))
+	}
+	val, ok := param.Input.Value.Content.(string)
+	if !ok {
+		return "", fmt.Errorf("param %s value is not string", safeParamName(param))
+	}
+	return val, nil
+}
+
+func safeParamName(param *vo.Param) string {
+	if param == nil || param.Name == "" {
+		return "unknown"
+	}
+	return param.Name
 }
 
 func (w *ApplicationService) MoveWorkflowFromAppToLibrary(ctx context.Context, workflowID int64, spaceID, /*not used for now*/
