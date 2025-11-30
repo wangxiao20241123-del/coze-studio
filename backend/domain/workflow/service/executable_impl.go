@@ -30,6 +30,7 @@ import (
 	workflowapimodel "github.com/coze-dev/coze-studio/backend/api/model/workflow"
 	crossmessage "github.com/coze-dev/coze-studio/backend/crossdomain/message"
 	workflowModel "github.com/coze-dev/coze-studio/backend/crossdomain/workflow/model"
+	"github.com/coze-dev/coze-studio/backend/domain/tokenlimit"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity/vo"
@@ -67,6 +68,10 @@ func (i *impl) SyncExecute(ctx context.Context, config workflowModel.ExecuteConf
 	}
 
 	config.WorkflowMode = wfEntity.Mode
+
+	if err := ensureTokenQuota(config.Operator); err != nil {
+		return nil, "", err
+	}
 
 	isApplicationWorkflow := wfEntity.AppID != nil
 	if isApplicationWorkflow && config.Mode == workflowModel.ExecuteModeRelease {
@@ -224,6 +229,10 @@ func (i *impl) AsyncExecute(ctx context.Context, config workflowModel.ExecuteCon
 
 	config.WorkflowMode = wfEntity.Mode
 
+	if err := ensureTokenQuota(config.Operator); err != nil {
+		return 0, err
+	}
+
 	isApplicationWorkflow := wfEntity.AppID != nil
 	if isApplicationWorkflow && config.Mode == workflowModel.ExecuteModeRelease {
 		err = i.checkApplicationWorkflowReleaseVersion(ctx, *wfEntity.AppID, config.ConnectorID, config.ID, config.Version)
@@ -364,6 +373,10 @@ func (i *impl) AsyncExecuteNode(ctx context.Context, nodeID string, config workf
 	}
 
 	config.WorkflowMode = wfEntity.Mode
+
+	if err := ensureTokenQuota(config.Operator); err != nil {
+		return 0, err
+	}
 
 	isApplicationWorkflow := wfEntity.AppID != nil
 	if isApplicationWorkflow && config.Mode == workflowModel.ExecuteModeRelease {
@@ -554,6 +567,17 @@ func (i *impl) StreamExecute(ctx context.Context, config workflowModel.ExecuteCo
 	wf.AsyncRun(cancelCtx, input, opts...)
 
 	return sr, nil
+}
+
+func ensureTokenQuota(operatorID int64) error {
+	if operatorID == 0 {
+		return nil
+	}
+	if tokenlimit.Allow(operatorID) {
+		return nil
+	}
+	return vo.WrapError(errno.ErrTokenQuotaExceeded,
+		fmt.Errorf("exceeds %d tokens within %s window", tokenlimit.Limit(), tokenlimit.Window()))
 }
 
 func (i *impl) GetExecution(ctx context.Context, wfExe *entity.WorkflowExecution, includeNodes bool) (*entity.WorkflowExecution, error) {

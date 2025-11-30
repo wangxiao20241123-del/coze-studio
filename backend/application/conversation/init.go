@@ -28,7 +28,9 @@ import (
 	message "github.com/coze-dev/coze-studio/backend/domain/conversation/message/service"
 	shortcutRepo "github.com/coze-dev/coze-studio/backend/domain/shortcutcmd/repository"
 	"github.com/coze-dev/coze-studio/backend/domain/shortcutcmd/service"
+	"github.com/coze-dev/coze-studio/backend/domain/tokenlimit"
 	uploadService "github.com/coze-dev/coze-studio/backend/domain/upload/service"
+	"github.com/coze-dev/coze-studio/backend/infra/cache"
 	"github.com/coze-dev/coze-studio/backend/infra/idgen"
 	"github.com/coze-dev/coze-studio/backend/infra/imagex"
 	"github.com/coze-dev/coze-studio/backend/infra/storage"
@@ -39,6 +41,7 @@ type ServiceComponents struct {
 	DB        *gorm.DB
 	TosClient storage.Storage
 	ImageX    imagex.ImageX
+	Cache     cache.Cmdable
 
 	SingleAgentDomainSVC singleagent.SingleAgent
 }
@@ -59,6 +62,8 @@ func InitService(s *ServiceComponents) *ConversationApplicationService {
 		RunRecordRepo: repository.NewRunRecordRepo(s.DB, s.IDGen),
 		ImagexSVC:     s.ImageX,
 	}
+
+	tokenlimit.Init(s.Cache)
 
 	agentRunDomainSVC := agentrun.NewService(arDomainComponents)
 	components := &service.Components{

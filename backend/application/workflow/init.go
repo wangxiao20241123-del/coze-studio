@@ -34,6 +34,7 @@ import (
 	variables "github.com/coze-dev/coze-studio/backend/domain/memory/variables/service"
 	plugin "github.com/coze-dev/coze-studio/backend/domain/plugin/service"
 	search "github.com/coze-dev/coze-studio/backend/domain/search/service"
+	"github.com/coze-dev/coze-studio/backend/domain/tokenlimit"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/config"
 	wrapPlugin "github.com/coze-dev/coze-studio/backend/domain/workflow/plugin"
@@ -91,6 +92,8 @@ func InitService(_ context.Context, components *ServiceComponents) (*Application
 	if err != nil {
 		return nil, err
 	}
+
+	tokenlimit.Init(components.Cache)
 
 	workflow.SetRepository(workflowRepo)
 

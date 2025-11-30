@@ -29,6 +29,7 @@ import (
 	"github.com/coze-dev/coze-studio/backend/domain/conversation/agentrun/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/conversation/agentrun/repository"
 	msgEntity "github.com/coze-dev/coze-studio/backend/domain/conversation/message/entity"
+	"github.com/coze-dev/coze-studio/backend/domain/tokenlimit"
 	"github.com/coze-dev/coze-studio/backend/infra/imagex"
 	"github.com/coze-dev/coze-studio/backend/pkg/logs"
 	"github.com/coze-dev/coze-studio/backend/types/errno"
@@ -152,9 +153,11 @@ func (art *AgentRuntime) Run(ctx context.Context) (err error) {
 				Code: errno.ErrConversationAgentRunError,
 				Msg:  err.Error(),
 			}
+			recordAgentRuntimeUsage(art)
 			art.RunProcess.StepToFailed(ctx, srRecord, art.SW)
 			return
 		}
+		recordAgentRuntimeUsage(art)
 		art.RunProcess.StepToComplete(ctx, srRecord, art.SW, art.GetUsage())
 	}()
 
@@ -197,6 +200,17 @@ func (art *AgentRuntime) getHistory(ctx context.Context) ([]*msgEntity.Message, 
 	}
 
 	return history, nil
+}
+
+func recordAgentRuntimeUsage(art *AgentRuntime) {
+	if art == nil || art.GetRunMeta() == nil {
+		return
+	}
+	usage := art.GetUsage()
+	if usage == nil || usage.LlmTotalTokens <= 0 {
+		return
+	}
+	tokenlimit.Record(art.GetRunMeta().CozeUID, usage.LlmTotalTokens)
 }
 
 func concactRunID(rr []*entity.RunRecordMeta) []int64 {

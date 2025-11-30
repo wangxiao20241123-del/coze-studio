@@ -28,6 +28,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	workflowModel "github.com/coze-dev/coze-studio/backend/crossdomain/workflow/model"
+	"github.com/coze-dev/coze-studio/backend/domain/tokenlimit"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/workflow/entity/vo"
@@ -84,6 +85,7 @@ func setRootWorkflowSuccess(ctx context.Context, event *Event, repo workflow.Rep
 			},
 		}, nil)
 	}
+	recordTokenUsage(event)
 	return nil
 }
 
@@ -258,8 +260,11 @@ func handleEvent(ctx context.Context, event *Event, repo workflow.Repository,
 					},
 				}, nil)
 			}
+			recordTokenUsage(event)
 			return workflowAbort, nil
 		}
+		recordTokenUsage(event)
+		return workflowAbort, nil
 	case WorkflowInterrupt:
 		if event.done != nil {
 			defer close(event.done)
@@ -399,8 +404,11 @@ func handleEvent(ctx context.Context, event *Event, repo workflow.Repository,
 					},
 				}, nil)
 			}
+			recordTokenUsage(event)
 			return workflowAbort, nil
 		}
+		recordTokenUsage(event)
+		return workflowAbort, nil
 	case WorkflowResume:
 		if sw == nil || event.SubWorkflowCtx != nil {
 			return noTerminate, nil
@@ -882,6 +890,26 @@ func waitUntilToolFinish(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func recordTokenUsage(event *Event) {
+	if event == nil || event.SubWorkflowCtx != nil {
+		return
+	}
+	operatorID := event.ExeCfg.Operator
+	if operatorID == 0 {
+		return
+	}
+	var total int64
+	if event.Token != nil && event.Token.TotalToken > 0 {
+		total = event.Token.TotalToken
+	} else {
+		total = event.GetInputTokens() + event.GetOutputTokens()
+	}
+	if total <= 0 {
+		return
+	}
+	tokenlimit.Record(operatorID, total)
 }
 
 func (f *fcInfo) inputString() string {

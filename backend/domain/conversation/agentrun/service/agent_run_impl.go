@@ -18,6 +18,7 @@ package agentrun
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
 	"time"
 
@@ -26,9 +27,12 @@ import (
 	"github.com/coze-dev/coze-studio/backend/domain/conversation/agentrun/entity"
 	"github.com/coze-dev/coze-studio/backend/domain/conversation/agentrun/internal"
 	"github.com/coze-dev/coze-studio/backend/domain/conversation/agentrun/repository"
+	"github.com/coze-dev/coze-studio/backend/domain/tokenlimit"
 	"github.com/coze-dev/coze-studio/backend/infra/imagex"
+	"github.com/coze-dev/coze-studio/backend/pkg/errorx"
 	"github.com/coze-dev/coze-studio/backend/pkg/logs"
 	"github.com/coze-dev/coze-studio/backend/pkg/safego"
+	"github.com/coze-dev/coze-studio/backend/types/errno"
 )
 
 type runImpl struct {
@@ -47,6 +51,12 @@ func NewService(c *Components) Run {
 }
 
 func (c *runImpl) AgentRun(ctx context.Context, arm *entity.AgentRunMeta) (*schema.StreamReader[*entity.AgentRunResponse], error) {
+	if arm != nil {
+		if err := ensureAgentTokenQuota(arm.CozeUID); err != nil {
+			return nil, err
+		}
+	}
+
 	sr, sw := schema.Pipe[*entity.AgentRunResponse](20)
 
 	defer func() {
@@ -90,4 +100,15 @@ func (c *runImpl) Cancel(ctx context.Context, req *entity.CancelRunMeta) (*entit
 
 func (c *runImpl) GetByID(ctx context.Context, runID int64) (*entity.RunRecordMeta, error) {
 	return c.RunRecordRepo.GetByID(ctx, runID)
+}
+
+func ensureAgentTokenQuota(cozeUID int64) error {
+	if cozeUID == 0 {
+		return nil
+	}
+	if tokenlimit.Allow(cozeUID) {
+		return nil
+	}
+	return errorx.New(errno.ErrTokenQuotaExceeded,
+		errorx.KV("cause", fmt.Sprintf("exceeds %d tokens within %s window", tokenlimit.Limit(), tokenlimit.Window())))
 }

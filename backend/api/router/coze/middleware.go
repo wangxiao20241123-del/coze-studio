@@ -1051,6 +1051,11 @@ func _uploadMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _gettokenusageMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
 func _mgetdocumentreviewMw() []app.HandlerFunc {
 	// your code...
 	return nil

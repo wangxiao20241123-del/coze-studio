@@ -32,6 +32,7 @@ const (
 	ErrQuestionOptionsEmpty                        = 720712049
 	ErrNodeOutputParseFail                         = 720712023
 	ErrWorkflowTimeout                             = 720702085
+	ErrTokenQuotaExceeded                          = 720702210
 	ErrWorkflowNotFound                            = 720702004
 	ErrSerializationDeserializationFail            = 720701011
 	ErrInternalBadRequest                          = 720701007
@@ -189,6 +190,12 @@ func init() {
 	code.Register(
 		ErrWorkflowTimeout,
 		"Workflow execution timed out. Please check for long-running operations, optimize if possible, or retry later.",
+		code.WithAffectStability(false),
+	)
+
+	code.Register(
+		ErrTokenQuotaExceeded,
+		"你的可用次数用完啦，休息一下，下次再来试试吧！",
 		code.WithAffectStability(false),
 	)
 
