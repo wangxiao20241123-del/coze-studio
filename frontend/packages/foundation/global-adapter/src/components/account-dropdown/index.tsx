@@ -14,39 +14,11 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
-
-import { GlobalLayoutAccountDropdown } from '@coze-foundation/layout';
-import { useLogout } from '@coze-foundation/account-ui-adapter';
-import { I18n } from '@coze-arch/i18n';
 import { useUserInfo } from '@coze-arch/foundation-sdk';
-import { IconCozExit } from '@coze-arch/coze-design/icons';
-
 export const AccountDropdown = () => {
-  const [visible, setVisible] = useState(false);
   const userInfo = useUserInfo();
-  const { node: logoutModal, open: openLogoutModal } = useLogout();
-
   if (!userInfo) {
     return null;
   }
-
-  return (
-    <GlobalLayoutAccountDropdown
-      menus={[
-        {
-          prefixIcon: <IconCozExit />,
-          title: I18n.t('basic_log_out'),
-          onClick: () => {
-            openLogoutModal();
-          },
-          dataTestId: 'layout_avatar_logout-button',
-        },
-      ]}
-      visible={visible}
-      onVisibleChange={setVisible}
-    >
-      {logoutModal}
-    </GlobalLayoutAccountDropdown>
-  );
+  return null;
 };
