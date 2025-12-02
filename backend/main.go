@@ -85,10 +85,7 @@ func startHttpServer() {
 
 	// cors option
 	config := cors.DefaultConfig()
-	config.AllowCredentials = true
-	config.AllowOriginFunc = func(origin string) bool {
-		return true
-	}
+	config.AllowAllOrigins = true
 	config.AllowHeaders = []string{"*"}
 	corsHandler := cors.New(config)
 
