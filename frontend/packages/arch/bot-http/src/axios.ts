@@ -36,7 +36,11 @@ export enum ErrorCodes {
   COZE_TOKEN_INSUFFICIENT_WORKFLOW = 702095072,
 }
 
-export const axiosInstance = axios.create();
+export const axiosInstance = axios.create({
+  // Always include cookies so that session-based auth works when the frontend and
+  // backend are served from different origins (e.g. dev server proxies).
+  withCredentials: true,
+});
 
 const HTTP_STATUS_COE_UNAUTHORIZED = 401;
 
