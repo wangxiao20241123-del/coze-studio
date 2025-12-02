@@ -119,13 +119,21 @@ func (s *SearchApplicationService) LibraryResourceList(ctx context.Context, req 
 		return nil, err
 	}
 
-	filterResource := make([]*common.ResourceInfo, 0)
+	spaceID := req.GetSpaceID()
+	onlyCreator := req.IsSetUserFilter() && req.GetUserFilter() > 0
+
+	filterResource := make([]*common.ResourceInfo, 0, len(resources))
 	for _, res := range resources {
 		if res == nil {
 			continue
 		}
-		if res.CreatorID != nil && *res.CreatorID != *userID {
-			return nil, errorx.New(errno.ErrSearchPermissionCode, errorx.KV("msg", "user can't search resources created by themselves"))
+		// Guardrail: filter out resources that were not published under the caller's workspace.
+		if res.SpaceID == nil || *res.SpaceID != spaceID {
+			continue
+		}
+		// If the caller requested to only view their own resources, skip anything else silently.
+		if onlyCreator && (res.CreatorID == nil || *res.CreatorID != *userID) {
+			continue
 		}
 		filterResource = append(filterResource, res)
 	}
