@@ -33,11 +33,9 @@ const initFlags = () => {
 const main = () => {
   // Initialize the value of the function switch
   initFlags();
-  // Initialize i18n
+  // Initialize i18n - Force zh-CN for open source version
   initI18nInstance({
-    lng: (localStorage.getItem('i18next') ?? (IS_OVERSEA ? 'en' : 'zh-CN')) as
-      | 'en'
-      | 'zh-CN',
+    lng: 'zh-CN',
   });
   // Import mdbox styles dynamically
   dynamicImportMdBoxStyle();

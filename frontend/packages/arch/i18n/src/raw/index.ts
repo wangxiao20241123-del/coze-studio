@@ -28,7 +28,7 @@ interface I18nConfig extends Record<string, unknown> {
   ns?: string;
 }
 export function initI18nInstance(config?: I18nConfig) {
-  const { lng = 'en', ns, ...restConfig } = config || {};
+  const { lng = 'zh-CN', ns, ...restConfig } = config || {};
   return new Promise(resolve => {
     I18n.use(LanguageDetector);
     I18n.init(
